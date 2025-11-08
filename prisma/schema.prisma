@@ -1,0 +1,109 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  email         String    @unique
+  passwordHash  String
+  demoBalance   Float     @default(10000)
+  createdAt     DateTime  @default(now())
+  positions     Position[]
+  orders        Order[]
+  trades        Trade[]
+  bookmarks     Bookmark[]
+}
+
+model MarketCache {
+  id              String   @id
+  slug            String   @unique
+  eventSlug       String?
+  question        String
+  description     String?
+  imageUrl        String?
+  outcomePricesJson String
+  outcomeLabelsJson String @default("[\"Yes\",\"No\"]")
+  endDate         DateTime?
+  active          Boolean
+  closed          Boolean
+  volume          Float?
+  volume24h       Float? @default(0)
+  volume7d        Float? @default(0)
+  volume30d       Float? @default(0)
+  category        String? @default("General")
+  lastSynced      DateTime @default(now())
+  positions       Position[]
+  orders          Order[]
+  trades          Trade[]
+  bookmarks       Bookmark[]
+}
+
+model EventCache {
+  id          String   @id
+  slug        String   @unique
+  title       String
+  startDate   String?
+  endDate     String?
+  tagsJson    String
+  active      Boolean
+  lastSynced  DateTime @default(now())
+}
+
+model Position {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  marketId      String
+  side          String
+  avgPrice      Float
+  quantity      Float
+  realizedPnl   Float     @default(0)
+  updatedAt     DateTime  @updatedAt
+  user          User      @relation(fields: [userId], references: [id])
+  market        MarketCache @relation(fields: [marketId], references: [id])
+}
+
+model Order {
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  marketId      String
+  side          String
+  orderType     String
+  quantity      Float
+  filledQty     Float     @default(0)
+  fillPrice     Float?
+  status        String
+  createdAt     DateTime  @default(now())
+  user          User      @relation(fields: [userId], references: [id])
+  market        MarketCache @relation(fields: [marketId], references: [id])
+  trades        Trade[]
+}
+
+model Trade {
+  id          Int       @id @default(autoincrement())
+  orderId     Int
+  userId      Int
+  marketId    String
+  side        String
+  quantity    Float
+  price       Float
+  createdAt   DateTime  @default(now())
+  order       Order     @relation(fields: [orderId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+  market      MarketCache @relation(fields: [marketId], references: [id])
+}
+
+model Bookmark {
+  id        Int       @id @default(autoincrement())
+  userId    Int
+  marketId  String
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id])
+  market    MarketCache @relation(fields: [marketId], references: [id])
+
+  @@unique([userId, marketId])
+}
