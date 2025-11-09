@@ -53,7 +53,12 @@ type MarketCardProps = {
   volume30d?: number;
   endDate?: string;
   category?: string;
+
+  // ✅ Add these two props
+  isBookmarked?: boolean;
+  onBookmarkChange?: () => void;
 };
+
 
 export default function MarketCard({
   id,
@@ -69,9 +74,11 @@ export default function MarketCard({
   volume30d = 0,
   endDate,
   category,
+  isBookmarked = false,
+  onBookmarkChange,
 }: MarketCardProps) {
   const { user } = useAuth();
-  const [bookmarked, setBookmarked] = useState<boolean>(isBookmarked(id));
+  const [bookmarked, setBookmarked] = useState<boolean>(   isBookmarked || isBookmarked(id) );
   const [loading, setLoading] = useState(false);
   const countdown = useCountdown(endDate);
 
@@ -83,6 +90,7 @@ export default function MarketCard({
       // if backend bookmark API exists, keep your fetch calls here
       toggleBookmark(id);
       setBookmarked(isBookmarked(id));
+      onBookmarkChange?.();
     } finally {
       setLoading(false);
     }
