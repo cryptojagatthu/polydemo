@@ -64,16 +64,22 @@ export default function Home() {
 
   // ---------------- Fetch bookmarks ----------------
   const fetchBookmarks = async () => {
-    if (!user) return;
-    try {
-      const response = await fetch(`/api/bookmarks?userId=${user.id}`);
-      const data = await response.json();
-      const bookmarkSet = new Set(data.bookmarks.map((b: any) => b.marketId));
-      setBookmarks(bookmarkSet);
-    } catch (error) {
-      console.error('Error fetching bookmarks:', error);
-    }
-  };
+  if (!user) return;
+  try {
+    const response = await fetch(`/api/bookmarks?userId=${user.id}`);
+    const data = await response.json();
+
+    // ✅ Explicitly type as Set<string>
+    const bookmarkSet = new Set<string>(
+      (data.bookmarks || []).map((b: any) => String(b.marketId))
+    );
+
+    setBookmarks(bookmarkSet);
+  } catch (error) {
+    console.error('Error fetching bookmarks:', error);
+  }
+};
+
 
   // ---------------- Apply filters & sorting ----------------
   const applyFilters = () => {
