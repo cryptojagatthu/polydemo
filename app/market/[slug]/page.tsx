@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import NavBar from '@/components/NavBar';
 import { useAuth } from '@/context/AuthContext';
-import { buyShares, sellShares, getHoldings } from '@/lib/demoPortfolio'; // ✅ correct path & top import
+import { buyShares, sellShares, getHoldings } from '@/lib/DemoPortfolio'; // ✅ correct path & top import
 
 // ---- helpers ----
 function useCountdown(endDate?: string) {
