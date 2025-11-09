@@ -14,8 +14,7 @@ function toggleBookmark(id: string) {
   localStorage.setItem('bookmarkedMarkets', JSON.stringify([...set]));
   return set.has(id);
 }
-function isBookmarked(id: string) { return getBookmarks().includes(id); }
-
+function checkBookmarked(id: string) { return getBookmarks().includes(id); }
 // ---- countdown helper ----
 function useCountdown(endDate?: string) {
   const [timeLeft, setTimeLeft] = useState<string | null>(null);
@@ -55,7 +54,7 @@ type MarketCardProps = {
   category?: string;
 
   // ✅ Add these two props
-  isBookmarked?: boolean;
+  checkBookmarked?: boolean;
   onBookmarkChange?: () => void;
 };
 
@@ -74,11 +73,11 @@ export default function MarketCard({
   volume30d = 0,
   endDate,
   category,
-  isBookmarked = false,
+  checkBookmarked = false,
   onBookmarkChange,
 }: MarketCardProps) {
   const { user } = useAuth();
-  const [bookmarked, setBookmarked] = useState<boolean>(   isBookmarked || isBookmarked(id) );
+  const [bookmarked, setBookmarked] = useState<boolean>(   checkBookmarked || checkBookmarked(id) );
   const [loading, setLoading] = useState(false);
   const countdown = useCountdown(endDate);
 
@@ -89,7 +88,7 @@ export default function MarketCard({
     try {
       // if backend bookmark API exists, keep your fetch calls here
       toggleBookmark(id);
-      setBookmarked(isBookmarked(id));
+      setBookmarked(checkBookmarked(id));
       onBookmarkChange?.();
     } finally {
       setLoading(false);
