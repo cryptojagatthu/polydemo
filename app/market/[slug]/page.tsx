@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import NavBar from '@/components/NavBar';
 import { useAuth } from '@/context/AuthContext';
-import { buyShares, sellShares, getHoldings } from '@/lib/DemoPortfolio';
+import { buyShares, sellShares, getHoldings } from '@/lib/demoPortfolio'; // ✅ correct path & top import
 
 // ---- helpers ----
 function useCountdown(endDate?: string) {
@@ -64,7 +64,6 @@ export default function MarketPage() {
       const res = await fetch(`/api/markets/${params.slug}`);
       const data = await res.json();
       if (data.success) {
-        // normalize data
         const m = data.market;
         const outcomes =
           m.outcomes ||
@@ -91,51 +90,61 @@ export default function MarketPage() {
     }
   };
 
-const placeOrder = async () => {
-  if (!user) {
-    setMessage('Please login to place orders');
-    setTimeout(() => router.push('/login'), 2000);
-    return;
-  }
-
-  if (quantity <= 0) {
-    setMessage('Quantity must be greater than 0');
-    return;
-  }
-
-  const holdings = getHoldings(market.id);
-  const userHolding = holdings.find((h) => h.outcome === side);
-
-  // ---- SELL CHECK ----
-  if (mode === 'sell') {
-    if (!userHolding || userHolding.shares < quantity) {
-      setMessage('❌ You do not have enough shares to sell');
+  // ✅ FIXED: Safe placeOrder function with ownership logic
+  const placeOrder = async () => {
+    if (!user) {
+      setMessage('Please login to place orders');
+      setTimeout(() => router.push('/login'), 2000);
       return;
     }
-  }
 
-  setPlacing(true);
-  setMessage('');
+    if (!market) {
+      setMessage('❌ Market not found');
+      return;
+    }
 
-  const price = selectedOutcome.price;
-  const total = price * quantity;
+    if (quantity <= 0) {
+      setMessage('Quantity must be greater than 0');
+      return;
+    }
 
-  // Update holdings locally
-  if (mode === 'buy') {
-    buyShares(market.id, side, quantity);
-    setMessage(`✅ Bought ${quantity} ${side} shares for $${total.toFixed(2)}`);
-  } else {
-    const ok = sellShares(market.id, side, quantity);
-    if (ok)
-      setMessage(`✅ Sold ${quantity} ${side} shares for $${total.toFixed(2)}`);
-    else setMessage('❌ Sell failed (not enough shares)');
-  }
+    const holdings = getHoldings(market.id);
+    const userHolding = holdings.find((h) => h.outcome === side);
 
-  setQuantity(10);
-  setPlacing(false);
-};
+    // ---- SELL CHECK ----
+    if (mode === 'sell') {
+      if (!userHolding || userHolding.shares < quantity) {
+        setMessage('❌ You do not have enough shares to sell.');
+        return;
+      }
+    }
 
+    setPlacing(true);
+    setMessage('');
 
+    const selectedOutcome =
+      market.outcomes.find((o) => o.label === side) || market.outcomes[0];
+    const price = selectedOutcome.price;
+    const total = price * quantity;
+
+    // ---- Local portfolio logic ----
+    if (mode === 'buy') {
+      buyShares(market.id, side, quantity);
+      setMessage(`✅ Bought ${quantity} ${side} shares for $${total.toFixed(2)}`);
+    } else {
+      const ok = sellShares(market.id, side, quantity);
+      if (ok) {
+        setMessage(`✅ Sold ${quantity} ${side} shares for $${total.toFixed(2)}`);
+      } else {
+        setMessage('❌ Sell failed (not enough shares)');
+      }
+    }
+
+    setQuantity(10);
+    setPlacing(false);
+  };
+
+  // ✅ LOADING & EMPTY STATES
   if (loading) {
     return (
       <>
