@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import NavBar from '@/components/NavBar';
 import { useAuth } from '@/context/AuthContext';
-import { buyShares, sellShares, getHoldings } from '@/lib/DemoPortfolio'; // ✅ correct path & top import
 
 // ---- helpers ----
 function useCountdown(endDate?: string) {
@@ -25,6 +24,7 @@ function useCountdown(endDate?: string) {
   return timeLeft;
 }
 
+// ---- types ----
 type Market = {
   id: string;
   slug: string;
@@ -40,7 +40,7 @@ type Market = {
 export default function MarketPage() {
   const params = useParams();
   const router = useRouter();
-  const { token, user } = useAuth();
+  const { token, user, refreshUser } = useAuth();
 
   const [market, setMarket] = useState<Market | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,30 +49,35 @@ export default function MarketPage() {
   const [quantity, setQuantity] = useState(10);
   const [placing, setPlacing] = useState(false);
   const [message, setMessage] = useState('');
+  const [userHoldings, setUserHoldings] = useState<any[]>([]);
 
   const countdown = useCountdown(market?.endDate);
 
-  // Fetch market and refresh every 15s
-  useEffect(() => {
-    fetchMarket();
-    const interval = setInterval(fetchMarket, 15000);
-    return () => clearInterval(interval);
-  }, [params.slug]);
+  // ------------------ FETCH FUNCTIONS ------------------
 
+  // Fetch the market details
   const fetchMarket = async () => {
     try {
       const res = await fetch(`/api/markets/${params.slug}`);
       const data = await res.json();
+
       if (data.success) {
         const m = data.market;
+
         const outcomes =
           m.outcomes ||
-          (m.outcomePrices
-            ? [
-                { label: 'YES', price: parseFloat(m.outcomePrices[0]) },
-                { label: 'NO', price: parseFloat(m.outcomePrices[1]) },
-              ]
-            : []);
+          (m.outcomeLabels && m.outcomePrices
+            ? JSON.parse(m.outcomeLabelsJson || '["Yes","No"]').map(
+                (label: string, idx: number) => ({
+                  label,
+                  price: parseFloat(JSON.parse(m.outcomePricesJson)[idx]),
+                })
+              )
+            : [
+                { label: 'YES', price: parseFloat(m.outcomePrices?.[0] || '0.5') },
+                { label: 'NO', price: parseFloat(m.outcomePrices?.[1] || '0.5') },
+              ]);
+
         setMarket({
           ...m,
           outcomes,
@@ -83,16 +88,69 @@ export default function MarketPage() {
             )}`,
         });
       }
+
       setLoading(false);
     } catch (error) {
-      console.error(error);
+      console.error('Error fetching market:', error);
       setLoading(false);
     }
   };
 
-  // ✅ FIXED: Safe placeOrder function with ownership logic
+  // Fetch the user's holdings from backend portfolio
+  const fetchHoldings = async () => {
+    if (!token || !market) {
+      setUserHoldings([]);
+      return;
+    }
+    try {
+      const res = await fetch('/api/portfolio', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+
+      if (data.success && Array.isArray(data.positions)) {
+        const holdings = data.positions
+          .filter((pos: any) => pos.marketSlug === market.slug)
+          .map((pos: any) => ({
+            outcome: pos.side,
+            shares: Number(pos.quantity),
+          }));
+        setUserHoldings(holdings);
+      } else {
+        setUserHoldings([]);
+      }
+    } catch (err) {
+      console.error('Error fetching holdings:', err);
+      setUserHoldings([]);
+    }
+  };
+
+  // ------------------ USE EFFECTS ------------------
+
+  // Fetch market every 15 seconds
+  useEffect(() => {
+    fetchMarket();
+    const interval = setInterval(fetchMarket, 15000);
+    return () => clearInterval(interval);
+  }, [params.slug]);
+
+  // Fetch holdings when market or token changes
+  useEffect(() => {
+    if (market && token) {
+      fetchHoldings();
+    } else {
+      setUserHoldings([]);
+    }
+  }, [market, token]);
+
+  // ------------------ ORDER LOGIC ------------------
+
   const placeOrder = async () => {
-    if (!user) {
+    console.log('=== placeOrder called ===');
+    console.log('User:', user);
+    console.log('Token:', token ? 'EXISTS' : 'MISSING');
+
+    if (!user || !token) {
       setMessage('Please login to place orders');
       setTimeout(() => router.push('/login'), 2000);
       return;
@@ -108,11 +166,9 @@ export default function MarketPage() {
       return;
     }
 
-    const holdings = getHoldings(market.id);
-    const userHolding = holdings.find((h) => h.outcome === side);
-
-    // ---- SELL CHECK ----
+    // SELL CHECK (now real backend data)
     if (mode === 'sell') {
+      const userHolding = userHoldings.find((h) => h.outcome === side);
       if (!userHolding || userHolding.shares < quantity) {
         setMessage('❌ You do not have enough shares to sell.');
         return;
@@ -122,29 +178,63 @@ export default function MarketPage() {
     setPlacing(true);
     setMessage('');
 
-    const selectedOutcome =
-      market.outcomes.find((o) => o.label === side) || market.outcomes[0];
-    const price = selectedOutcome.price;
-    const total = price * quantity;
+    try {
+      const selectedOutcome =
+        market.outcomes.find((o) => o.label === side) || market.outcomes[0];
+      const price = selectedOutcome.price;
+      const total = price * quantity;
 
-    // ---- Local portfolio logic ----
-    if (mode === 'buy') {
-      buyShares(market.id, side, quantity);
-      setMessage(`✅ Bought ${quantity} ${side} shares for $${total.toFixed(2)}`);
-    } else {
-      const ok = sellShares(market.id, side, quantity);
-      if (ok) {
-        setMessage(`✅ Sold ${quantity} ${side} shares for $${total.toFixed(2)}`);
+      const payload = {
+        marketSlug: market.slug,
+        side: side,
+        quantity: parseInt(quantity.toString()),
+      };
+
+      console.log('Order payload:', payload);
+
+      const endpoint = mode === 'buy' ? '/api/orders' : '/api/sell';
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      console.log('Order response:', data);
+
+      if (data.success) {
+        setMessage(
+          `✅ ${
+            mode === 'buy' ? 'Bought' : 'Sold'
+          } ${quantity} ${side} shares for $${total.toFixed(2)}`
+        );
+
+        // ✅ Refresh user balance and holdings
+        try {
+          await refreshUser?.();
+        } catch (e) {
+          console.warn('refreshUser failed:', e);
+        }
+        await fetchHoldings();
+
+        setQuantity(10);
       } else {
-        setMessage('❌ Sell failed (not enough shares)');
+        setMessage(`❌ ${data.error || 'Order failed'}`);
       }
+    } catch (error) {
+      console.error('Error placing order:', error);
+      setMessage(`❌ Error: ${String(error)}`);
     }
 
-    setQuantity(10);
     setPlacing(false);
   };
 
-  // ✅ LOADING & EMPTY STATES
+  // ------------------ UI ------------------
+
   if (loading) {
     return (
       <>
@@ -176,7 +266,7 @@ export default function MarketPage() {
       <NavBar />
       <div className="container mx-auto p-8">
         <div className="max-w-4xl mx-auto">
-          {/* Market Info */}
+          {/* ---------------- Market Info ---------------- */}
           <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
             {market.imageUrl && (
               <img
@@ -186,6 +276,10 @@ export default function MarketPage() {
               />
             )}
             <h1 className="text-2xl font-bold mb-2">{market.question}</h1>
+
+            {market.description && (
+              <p className="text-gray-600 mb-4">{market.description}</p>
+            )}
 
             <div className="text-sm text-gray-500 mb-2">
               Volume: ${market.volume?.toLocaleString()}
@@ -207,37 +301,45 @@ export default function MarketPage() {
             )}
           </div>
 
-          {/* Outcomes */}
+          {/* ---------------- Outcomes ---------------- */}
           <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
             <h2 className="text-lg font-semibold mb-3">Outcomes</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              {market.outcomes.map((o) => (
-                <div
-                  key={o.label}
-                  onClick={() => setSide(o.label)}
-                  className={`p-4 text-center border rounded cursor-pointer transition ${
-                    side === o.label
-                      ? 'bg-blue-100 border-blue-400'
-                      : 'hover:bg-gray-100'
-                  }`}
-                >
-                  <div className="text-sm text-gray-600">{o.label}</div>
-                  <div className="text-2xl font-bold text-blue-700">
-                    {(o.price * 100).toFixed(1)}¢
+              {market.outcomes.map((o) => {
+                const holding = userHoldings.find((h) => h.outcome === o.label);
+                return (
+                  <div
+                    key={o.label}
+                    onClick={() => setSide(o.label)}
+                    className={`p-4 text-center border rounded cursor-pointer transition ${
+                      side === o.label
+                        ? 'bg-blue-100 border-blue-400'
+                        : 'hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="text-sm text-gray-600">{o.label}</div>
+                    <div className="text-2xl font-bold text-blue-700">
+                      {(o.price * 100).toFixed(1)}¢
+                    </div>
+                    {holding && holding.shares > 0 && (
+                      <div className="text-xs text-green-600 mt-1">
+                        You own: {holding.shares}
+                      </div>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          {/* Trade Panel */}
+          {/* ---------------- Trade Panel ---------------- */}
           <div className="bg-white rounded-lg shadow-lg p-6">
             <div className="flex justify-between items-center mb-4">
               <h2 className="text-xl font-semibold">Trade</h2>
               <div className="flex gap-2">
                 <button
                   onClick={() => setMode('buy')}
-                  className={`px-4 py-2 rounded font-semibold ${
+                  className={`px-4 py-2 rounded font-semibold transition ${
                     mode === 'buy'
                       ? 'bg-green-600 text-white'
                       : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -247,7 +349,7 @@ export default function MarketPage() {
                 </button>
                 <button
                   onClick={() => setMode('sell')}
-                  className={`px-4 py-2 rounded font-semibold ${
+                  className={`px-4 py-2 rounded font-semibold transition ${
                     mode === 'sell'
                       ? 'bg-red-600 text-white'
                       : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -265,7 +367,7 @@ export default function MarketPage() {
             )}
 
             <div className="space-y-4">
-              {/* Quantity */}
+              {/* Quantity Input */}
               <div>
                 <label className="block text-sm font-medium mb-2">
                   Quantity (shares)
@@ -273,9 +375,7 @@ export default function MarketPage() {
                 <input
                   type="number"
                   value={quantity}
-                  onChange={(e) =>
-                    setQuantity(parseInt(e.target.value) || 0)
-                  }
+                  onChange={(e) => setQuantity(parseInt(e.target.value) || 0)}
                   className="w-full border rounded px-4 py-2"
                   min="1"
                 />
@@ -297,10 +397,11 @@ export default function MarketPage() {
                 </div>
               </div>
 
+              {/* Trade Button */}
               <button
                 onClick={placeOrder}
                 disabled={placing || !user}
-                className={`w-full py-3 rounded font-semibold ${
+                className={`w-full py-3 rounded font-semibold transition ${
                   placing || !user
                     ? 'bg-gray-400 cursor-not-allowed'
                     : mode === 'buy'
@@ -313,6 +414,7 @@ export default function MarketPage() {
                   : `${mode === 'buy' ? 'Buy' : 'Sell'} ${side} Shares`}
               </button>
 
+              {/* Message */}
               {message && (
                 <div
                   className={`p-4 rounded ${

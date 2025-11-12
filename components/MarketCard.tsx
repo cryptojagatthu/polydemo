@@ -82,19 +82,34 @@ export default function MarketCard({
   const [loading, setLoading] = useState(false);
   const countdown = useCountdown(endDate);
 
-  const handleBookmark = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (!user) return;
-    setLoading(true);
-    try {
-      // if backend bookmark API exists, keep your fetch calls here
-      toggleBookmark(id);
-      setBookmarked(checkBookmarked(id));
-      onBookmarkChange?.();
-    } finally {
-      setLoading(false);
+ const handleBookmark = async (e: React.MouseEvent) => {
+  e.preventDefault();
+  if (!user) return;
+  setLoading(true);
+
+  try {
+    if (!bookmarked) {
+      // Add bookmark
+      await fetch(`/api/bookmarks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.id, marketId: id }),
+      });
+    } else {
+      // Remove bookmark
+      await fetch(`/api/bookmarks?userId=${user.id}&marketId=${id}`, {
+        method: 'DELETE',
+      });
     }
-  };
+
+    setBookmarked(!bookmarked);
+    onBookmarkChange?.(); // Refresh list if on Bookmarks page
+  } catch (error) {
+    console.error('Bookmark error:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
     <Link href={`/market/${slug}`}>

@@ -10,7 +10,9 @@ type AuthContextType = {
   signup: (email: string, password: string) => Promise<void>;
   logout: () => void;
   isLoading: boolean;
+  refreshUser: () => Promise<void>;
 };
+
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
@@ -37,6 +39,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setIsLoading(false);
   }, []);
+  const refreshUser = async () => {
+  if (!token) return;
+  try {
+    const res = await fetch('/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await res.json();
+    if (data.success) {
+      setUser(data.user);
+      localStorage.setItem('user', JSON.stringify(data.user));
+    }
+  } catch (err) {
+    console.error('Failed to refresh user:', err);
+  }
+};
 
   const login = async (email: string, password: string) => {
     const res = await fetch('/api/auth/login', {
@@ -84,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, signup, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, token, login, signup, logout, isLoading, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );
