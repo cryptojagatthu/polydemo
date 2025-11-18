@@ -1,12 +1,39 @@
 'use client';
 import Link from 'next/link';
 import { useAuth } from '@/context/AuthContext';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function NavBar({ onSearchChange }: { onSearchChange?: (q: string) => void }) {
   const { user, logout } = useAuth();
   const [query, setQuery] = useState('');
   const [timeframe, setTimeframe] = useState<'day' | 'week' | 'month'>('day');
+
+  // DEV: periodically trigger price simulation so frontend can observe price changes
+  useEffect(() => {
+    if (process.env.NODE_ENV !== 'development') return;
+
+    let isStopped = false;
+
+    const callSim = async () => {
+      try {
+        await fetch('/api/simulate-prices');
+      } catch (err) {
+        console.warn('simulate-prices failed', err);
+      }
+    };
+
+    // initial call
+    callSim();
+
+    const interval = setInterval(() => {
+      if (!isStopped) callSim();
+    }, 15000); // update every 15 sec
+
+    return () => {
+      isStopped = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
@@ -17,7 +44,8 @@ export default function NavBar({ onSearchChange }: { onSearchChange?: (q: string
   return (
     <nav className="bg-gray-900 text-white p-4 shadow-lg sticky top-0 z-50">
       <div className="container mx-auto flex flex-wrap justify-between items-center gap-4">
-        {/* Left Section - Links */}
+        
+        {/* Left Section */}
         <div className="flex gap-6 items-center">
           <Link href="/" className="text-xl font-bold hover:text-blue-400">
             PolyDemo
@@ -25,6 +53,7 @@ export default function NavBar({ onSearchChange }: { onSearchChange?: (q: string
           <Link href="/" className="hover:text-blue-400">
             Markets
           </Link>
+
           {user && (
             <>
               <Link href="/portfolio" className="hover:text-blue-400">
@@ -37,8 +66,9 @@ export default function NavBar({ onSearchChange }: { onSearchChange?: (q: string
           )}
         </div>
 
-        {/* Right Section - Search, Filter, Auth */}
+        {/* Right Section */}
         <div className="flex items-center gap-2 flex-wrap">
+
           {/* Search */}
           <input
             value={query}
@@ -47,7 +77,7 @@ export default function NavBar({ onSearchChange }: { onSearchChange?: (q: string
             className="text-black rounded px-3 py-1 text-sm w-40"
           />
 
-          {/* Volume Timeframe Filter */}
+          {/* Volume Filter */}
           <select
             value={timeframe}
             onChange={(e) => setTimeframe(e.target.value as any)}

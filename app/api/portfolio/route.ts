@@ -90,13 +90,18 @@ export async function GET(req: NextRequest) {
       0
     );
 
-    return NextResponse.json({
-      success: true,
-      balance: user?.demoBalance || 0,
-      positions: positionsWithPnl,
-      totalUnrealizedPnl,
-      totalEquity: (user?.demoBalance || 0) + totalUnrealizedPnl,
-    });
+   return NextResponse.json({
+  success: true,
+
+  balanceUnlocked: user?.demoBalance || 0,
+  balanceLocked: user?.reservedBalance || 0,
+  balanceTotal: (user?.demoBalance || 0) + (user?.reservedBalance || 0),
+
+  positions: positionsWithPnl,
+  totalUnrealizedPnl,
+  totalEquity: (user?.demoBalance || 0) + totalUnrealizedPnl,
+});
+
   } catch (error) {
     console.error('Portfolio error:', error);
     return NextResponse.json(

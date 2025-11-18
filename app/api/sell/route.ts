@@ -1,3 +1,4 @@
+// app/api/sell/route.ts (MARKET SELL)
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { verifyToken } from '@/lib/auth';
@@ -42,12 +43,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Market not found' }, { status: 404 });
     }
 
-    // --- User ---
-    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
     // --- Price & holdings ---
     const prices = JSON.parse(market.outcomePricesJson || '["0.5","0.5"]');
     const price = side === 'YES' ? parseFloat(prices[0]) : parseFloat(prices[1]);
@@ -55,19 +50,30 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid market prices' }, { status: 500 });
     }
 
-    const existingPosition = await prisma.position.findFirst({
-      where: { userId: user.id, marketId: market.id, side },
-    });
-
-    if (!existingPosition || existingPosition.quantity < qty) {
-      return NextResponse.json({ error: 'Not enough shares to sell' }, { status: 400 });
-    }
-
-    const proceeds = qty * price;
-
-    // --- Transaction ---
+    // We will do the validation and writes inside a transaction to avoid races
     const result = await prisma.$transaction(async (tx) => {
-      // 1️⃣ Create Order
+      // re-read user & position inside tx
+      const user = await tx.user.findUnique({ where: { id: decoded.userId } });
+      if (!user) throw new Error('USER_NOT_FOUND_TX');
+
+      const existingPosition = await tx.position.findFirst({
+        where: { userId: user.id, marketId: market.id, side },
+      });
+      if (!existingPosition) {
+        throw new Error('NO_POSITION');
+      }
+
+      // Compute available shares (quantity - reservedQuantity)
+      const reserved = existingPosition.reservedQuantity || 0;
+      const available = (existingPosition.quantity || 0) - reserved;
+
+      if (available < qty) {
+        throw new Error(`INSUFFICIENT_SHARES: available ${available}, required ${qty}`);
+      }
+
+      const proceeds = qty * price;
+
+      // 1) Create order
       const order = await tx.order.create({
         data: {
           userId: user.id,
@@ -81,7 +87,7 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // 2️⃣ Create Trade linked to that order
+      // 2) Create trade
       const trade = await tx.trade.create({
         data: {
           orderId: order.id,
@@ -93,33 +99,37 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // 3️⃣ Update Position
+      // 3) Reduce user's shares (quantity) — reservedQuantity unaffected (we did not reserve these shares)
       const updatedPosition = await tx.position.update({
         where: { id: existingPosition.id },
         data: {
-          quantity: existingPosition.quantity - qty,
+          quantity: (existingPosition.quantity || 0) - qty,
         },
       });
 
-      // 4️⃣ Update Balance
+      // 4) Credit proceeds to user's demoBalance
       const updatedUser = await tx.user.update({
         where: { id: user.id },
-        data: { demoBalance: user.demoBalance + proceeds },
+        data: { demoBalance: { increment: proceeds } as any },
       });
 
-      return { order, trade, updatedPosition, updatedUser };
+      return { order, trade, updatedPosition, updatedUser, proceeds };
     });
 
     return NextResponse.json({
       success: true,
-      proceeds,
+      proceeds: result.proceeds,
       newBalance: result.updatedUser.demoBalance,
       order: result.order,
       trade: result.trade,
       position: result.updatedPosition,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Sell error:', error);
+    const msg = (error?.message || '').toString();
+    if (msg === 'NO_POSITION' || msg.startsWith('INSUFFICIENT_SHARES')) {
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
     return NextResponse.json({ error: 'Failed to sell' }, { status: 500 });
   }
 }

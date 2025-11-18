@@ -28,6 +28,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+
+  useEffect(() => {
+  if (!token) return;
+
+  const interval = setInterval(async () => {
+    const res = await fetch("/api/auth/me/", {    // ← IMPORTANT SLASH
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      setUser(data.user);
+    }
+  }, 3000);
+
+  return () => clearInterval(interval);
+}, [token]);
+
+
+
   useEffect(() => {
     // Load token from localStorage on mount
     const savedToken = localStorage.getItem('token');

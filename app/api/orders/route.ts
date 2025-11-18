@@ -1,3 +1,4 @@
+// app/api/orders/route.ts  (MARKET BUY)
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { verifyToken } from '@/lib/auth';
@@ -41,7 +42,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (quantity <= 0) {
+    const qty = Number(quantity);
+    if (isNaN(qty) || qty <= 0) {
       return NextResponse.json(
         { error: 'quantity must be greater than 0' },
         { status: 400 }
@@ -60,11 +62,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Get user
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-    });
-
+    // Get user (we will re-fetch inside transaction as well)
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
     if (!user) {
       return NextResponse.json(
         { error: 'User not found' },
@@ -73,85 +72,101 @@ export async function POST(req: NextRequest) {
     }
 
     // Calculate price and cost
-    const prices = JSON.parse(market.outcomePricesJson);
+    const prices = JSON.parse(market.outcomePricesJson || '["0.5","0.5"]');
     const price = side === 'YES' ? parseFloat(prices[0]) : parseFloat(prices[1]);
-    const cost = quantity * price;
-
-    // Check balance
-    if (user.demoBalance < cost) {
-      return NextResponse.json(
-        { error: `Insufficient balance. Need $${cost.toFixed(2)}, have $${user.demoBalance.toFixed(2)}` },
-        { status: 400 }
-      );
+    if (isNaN(price)) {
+      return NextResponse.json({ error: 'Invalid market prices' }, { status: 500 });
     }
+    const cost = qty * price;
 
-    // Create order
-    const order = await prisma.order.create({
-      data: {
-        userId: user.id,
-        marketId: market.id,
-        side,
-        orderType: 'MARKET',
-        quantity,
-        filledQty: quantity,
-        fillPrice: price,
-        status: 'FILLED',
-      },
-    });
+    // Perform everything in a single transaction (create order, trade, update/create position, and decrement balance)
+    const result = await prisma.$transaction(async (tx) => {
+      // Re-read the user within transaction to get latest demoBalance/reservedBalance
+      const u = await tx.user.findUnique({ where: { id: decoded.userId } });
+      if (!u) throw new Error('USER_NOT_FOUND_TX');
 
-    // Create trade
-    const trade = await prisma.trade.create({
-      data: {
-        orderId: order.id,
-        userId: user.id,
-        marketId: market.id,
-        side,
-        quantity,
-        price,
-      },
-    });
+      // **Important check**: ensure available free balance is >= cost.
+      // In your design demoBalance holds *free* funds and reservedBalance holds locked funds,
+      // because LIMIT-BUY reduced demoBalance and incremented reservedBalance at creation.
+      if ((u.demoBalance || 0) < cost) {
+        throw new Error(`INSUFFICIENT_BALANCE: need ${cost.toFixed(2)}, have ${(u.demoBalance || 0).toFixed(2)}`);
+      }
 
-    // Update or create position
-    const existingPosition = await prisma.position.findFirst({
-      where: { userId: user.id, marketId: market.id, side },
-    });
-
-    if (existingPosition) {
-      const newQty = existingPosition.quantity + quantity;
-      const newAvg =
-        (existingPosition.avgPrice * existingPosition.quantity + price * quantity) / newQty;
-
-      await prisma.position.update({
-        where: { id: existingPosition.id },
-        data: { quantity: newQty, avgPrice: newAvg },
-      });
-    } else {
-      await prisma.position.create({
+      // 1) create order
+      const order = await tx.order.create({
         data: {
-          userId: user.id,
+          userId: u.id,
           marketId: market.id,
           side,
-          avgPrice: price,
-          quantity,
+          orderType: 'MARKET',
+          quantity: qty,
+          filledQty: qty,
+          fillPrice: price,
+          status: 'FILLED',
         },
       });
-    }
 
-    // Deduct balance
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { demoBalance: user.demoBalance - cost },
+      // 2) create trade
+      const trade = await tx.trade.create({
+        data: {
+          orderId: order.id,
+          userId: u.id,
+          marketId: market.id,
+          side,
+          quantity: qty,
+          price,
+        },
+      });
+
+      // 3) update or create position
+      const existingPosition = await tx.position.findFirst({
+        where: { userId: u.id, marketId: market.id, side },
+      });
+
+      if (existingPosition) {
+        const newQty = existingPosition.quantity + qty;
+        const newAvg =
+          (existingPosition.avgPrice * existingPosition.quantity + price * qty) / newQty;
+
+        await tx.position.update({
+          where: { id: existingPosition.id },
+          data: { quantity: newQty, avgPrice: newAvg },
+        });
+      } else {
+        await tx.position.create({
+          data: {
+            userId: u.id,
+            marketId: market.id,
+            side,
+            avgPrice: price,
+            quantity: qty,
+          },
+        });
+      }
+
+      // 4) deduct balance (demoBalance is free funds)
+      await tx.user.update({
+        where: { id: u.id },
+        data: { demoBalance: { decrement: cost } as any },
+      });
+
+      // return to caller
+      return { order, trade, newBalance: (u.demoBalance - cost) };
     });
 
     return NextResponse.json({
       success: true,
-      order,
-      trade,
+      order: result.order,
+      trade: result.trade,
       cost,
-      newBalance: user.demoBalance - cost,
+      newBalance: result.newBalance,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error('Order error:', error);
+    const msg = (error?.message || '').toString();
+    if (msg.startsWith('INSUFFICIENT_BALANCE')) {
+      return NextResponse.json({ error: msg }, { status: 400 });
+    }
     return NextResponse.json(
       { error: 'Failed to place order' },
       { status: 500 }

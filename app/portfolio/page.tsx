@@ -20,8 +20,8 @@ export default function PortfolioPage() {
   const { token, user } = useAuth();
   const router = useRouter();
   const [positions, setPositions] = useState<Position[]>([]);
-  const [balance, setBalance] = useState(0);
-  const [totalPnl, setTotalPnl] = useState(0);
+  const [balance, setBalance] = useState<number>(0);
+  const [totalPnl, setTotalPnl] = useState<number>(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -31,8 +31,7 @@ export default function PortfolioPage() {
     }
 
     fetchPortfolio();
-    
-    // Refresh every 20 seconds
+
     const interval = setInterval(fetchPortfolio, 20000);
     return () => clearInterval(interval);
   }, [token]);
@@ -46,9 +45,9 @@ export default function PortfolioPage() {
       const data = await res.json();
 
       if (data.success) {
-        setBalance(data.balance);
+        setBalance(Number(data.balance || 0));
         setPositions(data.positions || []);
-        setTotalPnl(data.totalUnrealizedPnl);
+        setTotalPnl(Number(data.totalUnrealizedPnl || 0));
       }
       setLoading(false);
     } catch (error) {
@@ -89,7 +88,9 @@ export default function PortfolioPage() {
         <div className="grid grid-cols-3 gap-4 mb-8">
           <div className="bg-white rounded-lg shadow p-6">
             <div className="text-sm text-gray-600 mb-1">Cash Balance</div>
-            <div className="text-2xl font-bold">${balance.toFixed(2)}</div>
+            <div className="text-2xl font-bold">
+              ${Number(balance || 0).toFixed(2)}
+            </div>
           </div>
 
           <div className="bg-white rounded-lg shadow p-6">
@@ -97,14 +98,18 @@ export default function PortfolioPage() {
             <div className="text-2xl font-bold">{positions.length}</div>
           </div>
 
-          <div className={`rounded-lg shadow p-6 ${
-            totalPnl >= 0 ? 'bg-green-50' : 'bg-red-50'
-          }`}>
+          <div
+            className={`rounded-lg shadow p-6 ${
+              totalPnl >= 0 ? 'bg-green-50' : 'bg-red-50'
+            }`}
+          >
             <div className="text-sm text-gray-600 mb-1">Unrealized P&L</div>
-            <div className={`text-2xl font-bold ${
-              totalPnl >= 0 ? 'text-green-600' : 'text-red-600'
-            }`}>
-              ${totalPnl.toFixed(2)}
+            <div
+              className={`text-2xl font-bold ${
+                totalPnl >= 0 ? 'text-green-600' : 'text-red-600'
+              }`}
+            >
+              ${Number(totalPnl || 0).toFixed(2)}
             </div>
           </div>
         </div>
@@ -135,27 +140,43 @@ export default function PortfolioPage() {
                   <tr key={pos.id} className="border-b hover:bg-gray-50">
                     <td className="p-4">
                       <div className="font-semibold">{pos.marketQuestion}</div>
-                      <div className="text-xs text-gray-500">{pos.marketSlug}</div>
+                      <div className="text-xs text-gray-500">
+                        {pos.marketSlug}
+                      </div>
                     </td>
                     <td className="text-center p-4">
-                      <span className={`px-3 py-1 rounded text-sm font-semibold ${
-                        pos.side === 'YES'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
+                      <span
+                        className={`px-3 py-1 rounded text-sm font-semibold ${
+                          pos.side === 'YES'
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}
+                      >
                         {pos.side}
                       </span>
                     </td>
                     <td className="text-right p-4">{pos.quantity}</td>
-                    <td className="text-right p-4">${pos.avgPrice.toFixed(3)}</td>
-                    <td className="text-right p-4">${pos.currentPrice.toFixed(3)}</td>
-                    <td className="text-right p-4 font-semibold">
-                      ${pos.totalValue.toFixed(2)}
+
+                    <td className="text-right p-4">
+                      ${Number(pos.avgPrice || 0).toFixed(3)}
                     </td>
-                    <td className={`text-right p-4 font-semibold ${
-                      pos.unrealizedPnl >= 0 ? 'text-green-600' : 'text-red-600'
-                    }`}>
-                      ${pos.unrealizedPnl.toFixed(2)}
+
+                    <td className="text-right p-4">
+                      ${Number(pos.currentPrice || 0).toFixed(3)}
+                    </td>
+
+                    <td className="text-right p-4 font-semibold">
+                      ${Number(pos.totalValue || 0).toFixed(2)}
+                    </td>
+
+                    <td
+                      className={`text-right p-4 font-semibold ${
+                        pos.unrealizedPnl >= 0
+                          ? 'text-green-600'
+                          : 'text-red-600'
+                      }`}
+                    >
+                      ${Number(pos.unrealizedPnl || 0).toFixed(2)}
                     </td>
                   </tr>
                 ))
