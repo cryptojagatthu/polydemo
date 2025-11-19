@@ -3,31 +3,54 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { verifyToken } from "@/lib/auth";
 
-export async function DELETE(req: NextRequest, context: { params: { id: string } }) {
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string } | Promise<{ id: string }> }
+) {
   try {
-    const id = Number(context.params.id);
-    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    // Ensure params works whether it's a Promise or not
+    const { id } = await Promise.resolve(params);
+    const orderId = Number(id);
 
+    if (!orderId)
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+
+    // Authorization
     const auth = req.headers.get("authorization");
     const token = auth?.split(" ")[1];
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!token)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const decoded = verifyToken(token);
-    if (!decoded) return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+    if (!decoded)
+      return NextResponse.json({ error: "Invalid token" }, { status: 401 });
 
-    const order = await prisma.order.findUnique({ where: { id } });
-    if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 });
-    if (order.userId !== decoded.userId) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    if (order.status !== "OPEN") return NextResponse.json({ error: "Only OPEN orders can be cancelled" }, { status: 400 });
+    // Fetch order
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order)
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
 
+    if (order.userId !== decoded.userId)
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    if (order.status !== "OPEN")
+      return NextResponse.json(
+        { error: "Only OPEN orders can be cancelled" },
+        { status: 400 }
+      );
+
+    // Transaction: cancel order + balance fixes
     await prisma.$transaction(async (tx) => {
-      // mark cancelled
-      await tx.order.update({ where: { id }, data: { status: "CANCELLED" } });
+      // Mark cancelled
+      await tx.order.update({
+        where: { id: orderId },
+        data: { status: "CANCELLED" },
+      });
 
-      // If BUY: refund reservedBalance (limitPrice * qty)
+      // If BUY: refund reserved balance
       if (order.limitPrice != null) {
         const reservedAmount = order.limitPrice * order.quantity;
-        // if user has reservedBalance, decrement and add back to demoBalance
+
         await tx.user.update({
           where: { id: order.userId },
           data: {
@@ -37,12 +60,24 @@ export async function DELETE(req: NextRequest, context: { params: { id: string }
         });
       }
 
-      // If SELL: reduce reservedQuantity on position
-      const pos = await tx.position.findFirst({ where: { userId: order.userId, marketId: order.marketId, side: order.side } });
+      // If SELL: un-reserve quantity
+      const pos = await tx.position.findFirst({
+        where: {
+          userId: order.userId,
+          marketId: order.marketId,
+          side: order.side,
+        },
+      });
+
       if (pos) {
         await tx.position.update({
           where: { id: pos.id },
-          data: { reservedQuantity: Math.max(0, pos.reservedQuantity - order.quantity) },
+          data: {
+            reservedQuantity: Math.max(
+              0,
+              pos.reservedQuantity - order.quantity
+            ),
+          },
         });
       }
     });
