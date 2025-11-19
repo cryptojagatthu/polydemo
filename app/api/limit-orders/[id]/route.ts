@@ -8,14 +8,14 @@ export async function DELETE(
   { params }: { params: { id: string } | Promise<{ id: string }> }
 ) {
   try {
-    // Ensure params works whether it's a Promise or not
+    // Normalize params (supports Promise or plain)
     const { id } = await Promise.resolve(params);
     const orderId = Number(id);
 
     if (!orderId)
       return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-    // Authorization
+    // Auth
     const auth = req.headers.get("authorization");
     const token = auth?.split(" ")[1];
     if (!token)
@@ -25,8 +25,24 @@ export async function DELETE(
     if (!decoded)
       return NextResponse.json({ error: "Invalid token" }, { status: 401 });
 
-    // Fetch order
-    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    // Fetch order — SELECT fields explicitly (fixes Render build)
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        userId: true,
+        marketId: true,
+        side: true,
+        orderType: true,
+        sideType: true,
+        quantity: true,
+        filledQty: true,
+        fillPrice: true,
+        status: true,
+        limitPrice: true,   // <-- REQUIRED FIX
+      },
+    });
+
     if (!order)
       return NextResponse.json({ error: "Order not found" }, { status: 404 });
 
@@ -39,28 +55,28 @@ export async function DELETE(
         { status: 400 }
       );
 
-    // Transaction: cancel order + balance fixes
+    // Transaction: cancel order + balance adjustments
     await prisma.$transaction(async (tx) => {
-      // Mark cancelled
+      // Mark order cancelled
       await tx.order.update({
         where: { id: orderId },
         data: { status: "CANCELLED" },
       });
 
-      // If BUY: refund reserved balance
+      // If BUY limit order: refund reservedBalance
       if (order.limitPrice != null) {
         const reservedAmount = order.limitPrice * order.quantity;
 
         await tx.user.update({
           where: { id: order.userId },
           data: {
-            reservedBalance: { decrement: reservedAmount } as any,
-            demoBalance: { increment: reservedAmount } as any,
+            reservedBalance: { decrement: reservedAmount },
+            demoBalance: { increment: reservedAmount },
           },
         });
       }
 
-      // If SELL: un-reserve quantity
+      // Release reserved quantity for SELL orders
       const pos = await tx.position.findFirst({
         where: {
           userId: order.userId,
