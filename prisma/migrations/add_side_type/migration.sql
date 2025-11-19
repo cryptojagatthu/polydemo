@@ -1,1 +1,1 @@
-ALTER TABLE "Order" ADD COLUMN "sideType" TEXT;
+-- empty migration
