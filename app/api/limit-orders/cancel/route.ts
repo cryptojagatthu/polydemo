@@ -8,31 +8,42 @@ export async function POST(req: NextRequest) {
   try {
     const auth = req.headers.get("authorization");
     const token = auth?.split(" ")[1];
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    if (!token)
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const decoded = verifyToken(token);
-    if (!decoded) return NextResponse.json({ error: "Invalid token" }, { status: 401 });
+    if (!decoded)
+      return NextResponse.json({ error: "Invalid token" }, { status: 401 });
 
-    const body = await req.json();
-    const { orderId } = body;
+    const { orderId } = await req.json();
 
-    if (!orderId) {
+    if (!orderId)
       return NextResponse.json({ error: "orderId required" }, { status: 400 });
-    }
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
     });
 
-    if (!order) return NextResponse.json({ error: "Order not found" }, { status: 404 });
+    if (!order)
+      return NextResponse.json({ error: "Order not found" }, { status: 404 });
+
     if (order.userId !== decoded.userId)
       return NextResponse.json({ error: "Not allowed" }, { status: 403 });
+
     if (order.status !== "OPEN")
       return NextResponse.json({ error: "Order cannot be cancelled" }, { status: 400 });
 
     await prisma.$transaction(async (tx) => {
+
+      // ========== BUY LIMIT → refund locked money ==========
       if (order.sideType === "BUY") {
-        const refund = (order.limitPrice ?? 0) * order.quantity;
+        let refund = (order.limitPrice ?? 0) * order.quantity;
+
+        // ✅ Safety: normalize if someone stored cents by mistake
+        if (refund > 1 && refund > 100) {
+          refund = refund / 100;
+        }
 
         await tx.user.update({
           where: { id: order.userId },
@@ -43,6 +54,7 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      // ========== SELL LIMIT → unlock reserved shares ==========
       if (order.sideType === "SELL") {
         const pos = await tx.position.findFirst({
           where: {
@@ -53,18 +65,21 @@ export async function POST(req: NextRequest) {
         });
 
         if (pos) {
+          const newReserved = Math.max(
+            0,
+            (pos.reservedQuantity ?? 0) - order.quantity
+          );
+
           await tx.position.update({
             where: { id: pos.id },
             data: {
-              reservedQuantity: Math.max(
-                0,
-                (pos.reservedQuantity ?? 0) - order.quantity
-              ),
+              reservedQuantity: newReserved,
             },
           });
         }
       }
 
+      // ========== Mark order cancelled ==========
       await tx.order.update({
         where: { id: orderId },
         data: { status: "CANCELLED" },
@@ -75,6 +90,9 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error("Cancel order error:", err);
-    return NextResponse.json({ error: "Failed to cancel order" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to cancel order" },
+      { status: 500 }
+    );
   }
 }
